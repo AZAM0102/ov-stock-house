@@ -62,7 +62,8 @@ function GlobalSearch(){
     return()=>{document.removeEventListener('mousedown',onDown);document.removeEventListener('keydown',onKey)};
   },[]);
 
-  function goProduct(p:Product){
+  function goProduct(p:Product|undefined){
+    if(!p) return;
     setSelectedCompanyId(p.companyId);
     setQ('');setOpen(false);
     router.push(`/products?search=${encodeURIComponent(p.sku)}`);
@@ -81,7 +82,7 @@ function GlobalSearch(){
       <button type="submit" aria-label="Search">⌕</button>
     </form>
     {open&&normalized&&<div className="search-results">
-      {results.length===0?<div className="search-empty">No matching SKU, product or order found.</div>:results.map((r,i)=>r.kind==='product'&&r.product?<button className="search-result" key={`p-${r.product.id}-${i}`} onClick={()=>goProduct(r.product)}>
+      {results.length===0?<div className="search-empty">No matching SKU, product or order found.</div>:results.map((r,i)=>r.kind==='product'&&r.product?<button className="search-result" key={`p-${r.product.id}-${i}`} onClick={()=>{if(r.product) goProduct(r.product)}}>
         <span className="search-result-icon">□</span><span className="search-result-main"><b>{r.product.sku}</b><small>{r.product.name||'Unnamed product'} · {r.product.companyName}</small></span><strong>{r.product.stock} stock</strong>
       </button>:<button className="search-result" key={`o-${r.order?.id}-${i}`} onClick={()=>{setQ('');setOpen(false);router.push('/orders')}}>
         <span className="search-result-icon">▤</span><span className="search-result-main"><b>Order {String(r.order?.id||'').slice(0,10)}</b><small>{r.order?.sku} · {r.order?.platform}</small></span><strong>{r.order?.items} units</strong>
