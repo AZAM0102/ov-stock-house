@@ -42,7 +42,7 @@ async function request<T = any>(
 
   const text = await res.text();
 
-  return text ? JSON.parse(text) : null;
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 export const db = {
