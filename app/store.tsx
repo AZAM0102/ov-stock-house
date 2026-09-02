@@ -29,7 +29,7 @@ export function StoreProvider({children}:{children:React.ReactNode}){
    try{setLoading(true);setDbError('');
      const [cs,ps,ms,os,rs]=await Promise.all([db.select<any>('companies','select=*&order=name.asc'),db.select<any>('products','select=*&order=sku.asc'),db.select<any>('inventory_movements','select=*&order=created_at.desc&limit=1000'),db.select<any>('orders','select=*&order=order_date.desc&limit=1000'),db.select<any>('returns','select=*&order=return_date.desc&limit=1000')]);
 const companies=cs.map((r:any)=>mapCompany(r));
-const products=ps.map((r:any)=>mapProduct(r,companies.find(c=>c.id===r.company_id)||{id:r.company_id,name:'Unknown',sourceFile:''}));     const movements=ms.map(r=>mapMovement(r,products)); const running=new Map(products.map(p=>[p.id,p.stock])); for(const m of movements){m.stockAfter=running.get(m.productId)||0; running.set(m.productId,(running.get(m.productId)||0)-m.qty);} setData({companies,products,movements,orders:os.map(r=>mapOrder(r,products)),returns:rs.map(r=>mapReturn(r,products))});
+const products=ps.map((r:any)=>mapProduct(r,companies.find(c=>c.id===r.company_id)||{id:r.company_id,name:'Unknown',sourceFile:''}));     const movements=ms.map((r:any)=>mapMovement(r,products)); const running=new Map(products.map(p=>[p.id,p.stock])); for(const m of movements){   m.stockAfter=running.get(m.productId)||0;   running.set(m.productId,(running.get(m.productId)||0)-m.qty); } setData({   companies,   products,   movements,   orders:os.map((r:any)=>mapOrder(r,products)),   returns:rs.map((r:any)=>mapReturn(r,products)) });
    }catch(e:any){setDbError(e?.message||'Could not load Supabase data.');}
    finally{setLoading(false);setReady(true)}
  };
