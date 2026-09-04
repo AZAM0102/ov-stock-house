@@ -1,28 +1,75 @@
-# OV Stock House — Supabase Connected
+# OV Stock House — Production-Hardened
 
-OV Stock House is now connected to the Supabase project configured in `.env.local`.
+OV Stock House is a Supabase-backed inventory command center for five company inventories.
 
-## Cloud data
-- 5 companies
-- 86 products
-- Exact Excel SKUs preserved
-- 4,135 current stock units at migration time
-- Imported stock-in movement history
-- Orders and returns tables ready for live use
-- Atomic stock update and return-QC database functions
-- Automatic refresh every 8 seconds so multiple devices converge on cloud data
+## Included
+- 5 companies / 86 products with exact Excel SKUs preserved
+- Live Supabase source of truth
+- Stock In / Stock Out with locked inventory counters
+- Barcode/manual SKU scanner
+- Atomic marketplace order creation
+- Marketplace Order ID duplicate protection
+- Returns → QC Pending → Resellable / Damaged
+- Atomic Flipkart PDF bulk processing
+- Idempotent Flipkart re-upload protection
+- Excel reports
+- Product archive instead of destructive delete
+- Supabase Auth login and signed-in database requests
+- Production RLS and least-privilege table/function permissions
 
-## Important
-The browser no longer stores inventory/order/return data in localStorage. Supabase is the source of truth. Only the selected-company preference is stored locally.
+## First-time production setup
 
-The current UI has no login screen, so the app currently uses the Supabase publishable key with temporary `anon` CRUD policies. Before public production deployment, add Supabase Auth and tighten RLS policies to authenticated users/roles.
+### 1. Environment variables
+Copy `.env.example` to `.env.local` for local development and set:
 
-## Environment
-Copy `.env.example` to `.env.local` and set:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
-The publishable key is safe for browser use; never expose a Supabase service-role key in client code.
+Never add a Supabase service-role/secret key to browser code.
 
-## Current integrations
-WhatsApp/low-stock notification integration is disabled for now. The core stock, orders, returns, scanning, SKU editing, and Supabase persistence remain enabled.
+### 2. Apply the database migration
+Run the SQL in:
+
+`supabase/migrations/20260905_ov_stock_house_production.sql`
+
+Use the Supabase SQL Editor for a quick one-time setup, or add the file to your normal Supabase migration workflow.
+
+The migration:
+- adds `products.is_active`
+- adds `orders.marketplace_order_id`
+- adds SKU/order indexes
+- locks opening stock/company after product creation
+- removes anonymous CRUD access
+- grants only required authenticated permissions
+- restricts RPC execution to authenticated users
+- creates atomic `create_order()` and `process_flipkart_batch()` functions
+
+### 3. Create the admin user
+In Supabase Dashboard → Authentication → Users, create the authorized email/password account used to access OV Stock House.
+
+This project intentionally has no public sign-up screen.
+
+### 4. Vercel
+Set the same two public environment variables in the Vercel project for Production/Preview as required.
+
+## Inventory rules
+- Opening Stock is editable only when creating a new product.
+- Existing stock changes must go through Stock In, Stock Out, or QC-approved Resellable returns.
+- Orders deduct stock and create the order + movement in one database transaction.
+- Flipkart batches are processed atomically; if any new line fails, the complete batch rolls back.
+- Re-uploading the same Flipkart labels skips already-recorded order lines.
+- Products with history are archived, not deleted.
+
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+## Production build
+
+```bash
+npm run build
+npm start
+```

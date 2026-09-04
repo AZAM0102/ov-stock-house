@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { StoreProvider } from "./store";
+import { AuthGate, AuthProvider } from "./auth";
 import PWARegister from "./pwa-register";
 
 export const metadata: Metadata = {
@@ -12,7 +13,16 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body><StoreProvider><PWARegister />{children}</StoreProvider></body>
+      <body>
+        <AuthProvider>
+          <AuthGate>
+            <StoreProvider>
+              <PWARegister />
+              {children}
+            </StoreProvider>
+          </AuthGate>
+        </AuthProvider>
+      </body>
     </html>
   );
 }

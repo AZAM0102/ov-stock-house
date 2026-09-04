@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, Product } from './store';
+import { useAuth } from './auth';
 
 const items = [
   ['Dashboard','/'],
@@ -40,7 +41,7 @@ function GlobalSearch(){
     const companyScoped=selectedCompanyId==='all'?products:products.filter(p=>p.companyId===selectedCompanyId);
     const productMatches=companyScoped.filter(p=>[p.sku,p.name,p.barcode,p.companyName].join(' ').toLowerCase().includes(normalized)).slice(0,7);
     const productIds=new Set(productMatches.map(p=>p.id));
-    const orderMatches=orders.filter(o=>[o.id,o.sku,o.platform,o.companyId].join(' ').toLowerCase().includes(normalized)).slice(0,3);
+    const orderMatches=orders.filter(o=>[o.id,o.marketplaceOrderId,o.sku,o.platform,o.companyId].join(' ').toLowerCase().includes(normalized)).slice(0,3);
     const out:Array<{kind:'product'|'order';product?:Product;order?:any}>=productMatches.map(product=>({kind:'product',product}));
     for(const order of orderMatches){
       if(!out.some(x=>x.kind==='order'&&x.order?.id===order.id)) out.push({kind:'order',order});
@@ -86,16 +87,17 @@ function GlobalSearch(){
 
 export function Shell({children,active,title}:{children:React.ReactNode;active:string;title:string}){
   const path=usePathname();
-  const {companies,selectedCompanyId,setSelectedCompanyId}=useStore();
+  const {companies,selectedCompanyId,setSelectedCompanyId,dbError}=useStore();
+  const {session,signOut}=useAuth();
   return <div className="app-shell">
     <aside className="sidebar">
       <Link href="/" className="side-brand"><img src="/online-vyapari-logo.webp"/><div><b>OV Stock House</b><small>Inventory Manager</small></div></Link>
       <div className="company-switch"><span>ACTIVE COMPANY</span><select value={selectedCompanyId} onChange={e=>setSelectedCompanyId(e.target.value)}><option value="all">All Companies</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
       <nav>{items.map(([l,h])=><Link href={h} key={l} className={(active===l||(l==='Inventory'&&path.startsWith('/inventory')))?'active':''}><i>{iconFor(l)}</i>{l}</Link>)}</nav>
-      <div className="sidebar-bottom"><Link href="/settings">⚙ Settings</Link><div className="user-mini"><span>A</span><div><b>Azam</b><small>Administrator</small></div></div></div>
+      <div className="sidebar-bottom"><Link href="/settings">⚙ Settings</Link><div className="user-mini"><span>A</span><div><b>{session?.user?.email?.split("@")[0] || "Admin"}</b><small>Administrator</small></div><button className="logout-mini" onClick={()=>void signOut()} title="Sign out">↪</button></div></div>
     </aside>
     <nav className="mobile-nav">{[items[0],items[1],items[2],items[4],items[5],items[6]].map(([l,h])=><Link href={h} key={l} className={active===l?'active':''}><i>{iconFor(l)}</i><span>{l==='Scan Product'?'Scan':l}</span></Link>)}</nav>
-    <main className="main"><header className="topbar"><div className="mobile-title"><b>OV</b> {title}</div><GlobalSearch/><div className="top-actions"><span className="top-company">{selectedCompanyId==='all'?'All Companies':companies.find(c=>c.id===selectedCompanyId)?.name}</span><div className="avatar">A</div></div></header><div className="content">{children}</div></main>
+    <main className="main"><header className="topbar"><div className="mobile-title"><b>OV</b> {title}</div><GlobalSearch/><div className="top-actions"><span className="top-company">{selectedCompanyId==='all'?'All Companies':companies.find(c=>c.id===selectedCompanyId)?.name}</span><div className="avatar">A</div></div></header><div className="content">{dbError&&<div className="alert-box danger-alert" role="alert"><b>Database error</b><p>{dbError}</p><small>Check your Supabase configuration/session and refresh the page.</small></div>}{children}</div></main>
   </div>;
 }
 

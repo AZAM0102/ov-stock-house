@@ -30,17 +30,6 @@ function escapeRegExp(value:string){
   return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 }
 
-function makeDeterministicUuid(value:string){
-  let h1=0x811c9dc5, h2=0x01000193;
-  for(let i=0;i<value.length;i++){
-    const c=value.charCodeAt(i);
-    h1^=c; h1=Math.imul(h1,16777619);
-    h2^=c+i; h2=Math.imul(h2,2246822519);
-  }
-  const hex=`${(h1>>>0).toString(16).padStart(8,'0')}${(h2>>>0).toString(16).padStart(8,'0')}${((h1^h2)>>>0).toString(16).padStart(8,'0')}${((h1+h2)>>>0).toString(16).padStart(8,'0')}`;
-  return `${hex.slice(0,8)}-${hex.slice(8,12)}-4${hex.slice(13,16)}-${(8+(parseInt(hex.slice(16,17),16)%4).toString(16))}${hex.slice(17,20)}-${hex.slice(20,32)}`;
-}
-
 async function extractPdfPages(file:File){
   const pdfjs:any=await import('pdfjs-dist/legacy/build/pdf.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc=
@@ -120,14 +109,15 @@ function parsePages(
       // Don't let tracking/AWB data become a quantity.
       segment=segment.split(/\b(?:FMPC|FMPP)\d{8,}\b/i)[0];
 
-      const numbers=[...segment.matchAll(
-        /(?<![A-Za-z0-9])\d+(?![A-Za-z0-9])/g
-      )].map(m=>Number(m[0])).filter(n=>n>0 && n<1000);
+      // Only trust an explicit quantity marker. Random label numbers such as
+      // prices, PIN codes, dates or tracking values must never become stock qty.
+      const qtyMatch=segment.match(/\b(?:QTY|QUANTITY)\s*[:#-]?\s*(\d{1,3})\b/i);
+      const explicitQty=qtyMatch ? Number(qtyMatch[1]) : 0;
 
-      // If another SKU immediately follows, this occurrence is one unit.
-      // Otherwise use the last standalone number as QTY; default to one.
+      // If another SKU immediately follows, each occurrence represents one unit.
+      // Otherwise use explicit QTY when present; safe fallback is one unit.
       const nextIsSku=Boolean(next);
-      const qty=nextIsSku ? 1 : (numbers.length ? numbers[numbers.length-1] : 1);
+      const qty=nextIsSku ? 1 : (explicitQty>0 && explicitQty<1000 ? explicitQty : 1);
 
       const p=skuMap.get(hit.sku)!;
       orders.push({
@@ -227,108 +217,51 @@ export default function FlipkartUpload(){
     if(!ready) return;
 
     const ok=confirm(
-      `Flipkart ke ${totalUnits} units stock se deduct honge aur ${parsedOrders.length} order records banenge. Continue?`
+      `Flipkart ke ${totalUnits} units verify karke atomic transaction mein process honge. Continue?`
     );
     if(!ok) return;
 
-    const insertedIds:string[]=[];
-
     try{
       setBusy(true);
-      setStatus('Checking duplicate orders and preparing stock update...');
+      setStatus('Preparing an atomic Flipkart stock transaction...');
 
-      // Re-check current stock from the latest selected products before writing.
-      const currentById=new Map(selectedProducts.map(p=>[p.id,p]));
-      const newOrders:ParsedOrder[]=[];
-
+      // Aggregate repeated SKU hits belonging to the same marketplace order.
+      // This prevents SKU|SKU on one label from creating duplicate order rows.
+      const batchMap=new Map<string,{order_id:string;product_id:string;sku:string;qty:number;shipping_partner:string}>();
       for(const order of parsedOrders){
-        const p=currentById.get(order.productId);
-        if(!p) throw new Error(`SKU ${order.sku} current company mein nahi mila.`);
-
-        const orderUuid=makeDeterministicUuid(
-          `${selectedCompanyId}|flipkart|${order.orderId}|${order.sku}`
-        );
-
-        const existing=await db.select<any>(
-          'orders',
-          `select=id&company_id=eq.${encodeURIComponent(selectedCompanyId)}&id=eq.${orderUuid}`
-        );
-
-        if(existing?.length) continue;
-        newOrders.push({...order,stock:p.stock});
-      }
-
-      // Aggregate only NEW orders, so a partially processed upload can be retried safely.
-      const newTotals=new Map<string,{productId:string;sku:string;qty:number}>();
-      for(const order of newOrders){
-        const old=newTotals.get(order.productId);
-        newTotals.set(order.productId,{
-          productId:order.productId,
-          sku:order.sku,
-          qty:(old?.qty||0)+order.qty
-        });
-      }
-
-      for(const item of newTotals.values()){
-        const p=currentById.get(item.productId);
-        if(!p) throw new Error(`SKU ${item.sku} current company mein nahi mila.`);
-        if(item.qty>p.stock){
-          throw new Error(
-            `SKU ${item.sku} ke paas sirf ${p.stock} stock hai, lekin ${item.qty} new units process hone hain.`
-          );
-        }
-      }
-
-      // Process each order separately. This gives the Orders page the actual
-      // number of Flipkart order rows and creates one stock movement per order.
-      for(const order of newOrders){
-        const orderUuid=makeDeterministicUuid(
-          `${selectedCompanyId}|flipkart|${order.orderId}|${order.sku}`
-        );
-
-        await db.rpc('adjust_stock',{
-          p_product_id:order.productId,
-          p_quantity:order.qty,
-          p_movement_type:'Stock Out',
-          p_platform:'Flipkart',
-          p_shipping_partner:'E-Kart Logistics',
-          p_note:`Flipkart label ${order.orderId} • PDF: ${file?.name||'PDF'}`
-        });
-
-        await db.insert('orders',{
-          id:orderUuid,
-          company_id:selectedCompanyId,
+        const key=`${order.orderId.toUpperCase()}|${order.productId}`;
+        const old=batchMap.get(key);
+        batchMap.set(key,{
+          order_id:order.orderId,
           product_id:order.productId,
-          platform:'Flipkart',
-          quantity:order.qty,
+          sku:order.sku,
+          qty:(old?.qty||0)+order.qty,
           shipping_partner:'E-Kart Logistics',
-          order_date:new Date().toISOString()
         });
-
-        insertedIds.push(orderUuid);
       }
 
-      const skipped=parsedOrders.length-newOrders.length;
-      const message=skipped>0
-        ? `Done — ${newOrders.length} new Flipkart order records processed; ${skipped} duplicate orders skipped.`
-        : `Done — ${newOrders.length} Flipkart order records processed.`;
-
-      setUpdated(true);
-      setStatus(message);
-      alert(`${message}\n\n${totalUnits} units were detected in the uploaded labels.`);
-      window.location.reload();
-    }catch(e:any){
-      // If a later operation fails, remove order rows that were inserted in this
-      // run. Stock movements are not safely reversible here, so surface the
-      // error instead of silently pretending a rollback happened.
-      for(const id of insertedIds){
-        try{ await db.remove('orders',`id=eq.${id}`); }catch{}
-      }
-      setStatus('');
-      alert(
-        `${e?.message||'Stock update fail ho gaya.'}\n\n`+
-        'Agar error stock update ke beech mein aaya hai, Inventory History check kar lena.'
+      const result=await db.rpc<{processed:number;skipped:number;units_processed:number;units_skipped:number}>(
+        'process_flipkart_batch',
+        {
+          p_company_id:selectedCompanyId,
+          p_file_name:file?.name||'Flipkart PDF',
+          p_orders:[...batchMap.values()],
+        }
       );
+
+      const processed=Number(result?.processed||0);
+      const skipped=Number(result?.skipped||0);
+      const unitsProcessed=Number(result?.units_processed||0);
+      const unitsSkipped=Number(result?.units_skipped||0);
+      setUpdated(true);
+      const message=`Done — ${processed} new Flipkart order lines processed (${unitsProcessed} units). ${skipped} already-processed duplicate lines skipped (${unitsSkipped} units).`;
+      setStatus(message);
+      alert(message);
+      window.location.reload();
+    }catch(e:unknown){
+      setStatus('');
+      alert((e instanceof Error?e.message:'Flipkart stock update failed.')+'\n\nNo partial batch is committed; the database transaction rolls back on failure.');
+      await new Promise(resolve=>setTimeout(resolve,100));
       window.location.reload();
     }finally{
       setBusy(false);

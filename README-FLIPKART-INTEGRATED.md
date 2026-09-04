@@ -1,27 +1,20 @@
-# OV Stock House — v3 + Flipkart Label Import
+# Flipkart PDF Bulk Upload
 
-This project is based on the OV Stock House Mobile App v3 SKU Suggestions build and integrates
-the Flipkart bulk label PDF workflow.
+## Safe flow
+1. Select one company.
+2. Upload a selectable-text Flipkart label PDF.
+3. Analyze the label pages.
+4. Match exact company SKUs.
+5. Preview units and insufficient-stock warnings.
+6. Confirm once.
+7. The browser sends one batch to `process_flipkart_batch()`.
+8. The database transaction creates stock-out movements and order rows atomically.
+9. Re-uploading the same PDF skips already-recorded `(company, platform, marketplace order ID, SKU)` lines.
 
-## Flipkart workflow
+## Quantity safety
+The parser trusts explicit `QTY` / `QUANTITY` markers. It does not use arbitrary numbers from the label as quantity because AWB, price, date and other numeric values can otherwise corrupt stock.
 
-1. Select a specific company from the sidebar.
-2. Open **Flipkart Upload**.
-3. Upload a Flipkart shipping-label PDF.
-4. Analyze the PDF.
-5. The app reads the label section before `Tax Invoice`, so invoice-side SKU repeats are not double counted.
-6. Exact existing company SKUs are matched case-insensitively.
-7. Same SKU repeated twice on a label counts as 2 units.
-8. Different SKUs on one label are counted separately.
-9. A normal explicit quantity such as QTY 2 is counted as 2.
-10. Unknown SKUs or insufficient stock block the update.
-11. Confirming the update creates one Flipkart order ledger record per label/order+SKU and one Stock Out movement per order.
-12. Platform is fixed to Flipkart and shipping partner is recorded as E-Kart Logistics.
-13. Re-uploading the same labels skips already-recorded order+SKU records to avoid duplicate deductions.
+If a label has the same SKU twice, the two occurrences are aggregated into one order line for that marketplace order/SKU.
 
-## Important
-
-- The PDF parser is intended for text/selectable Flipkart labels. Image-only scanned PDFs would need OCR.
-- `.env.local` is intentionally excluded from this distributable ZIP. Configure Supabase in your local `.env.local`
-  or Vercel Environment Variables using `.env.example`.
-- Keep the Supabase publishable/anon key in environment variables; never commit secret/service-role keys.
+## Limitation
+The browser parser requires selectable text. Image-only/scanned PDFs are not OCR-enabled in this version.
