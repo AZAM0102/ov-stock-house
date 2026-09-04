@@ -23,3 +23,6 @@ Copy `.env.example` to `.env.local` and set:
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
 The publishable key is safe for browser use; never expose a Supabase service-role key in client code.
+
+## Current integrations
+WhatsApp/low-stock notification integration is disabled for now. The core stock, orders, returns, scanning, SKU editing, and Supabase persistence remain enabled.

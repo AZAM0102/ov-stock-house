@@ -27,13 +27,6 @@ function iconFor(label:string){
   return '◈';
 }
 
-function DoraemonAvatar({small=false}:{small?:boolean}){
-  return <span className={`dora-avatar ${small?'small':''}`} aria-hidden="true">
-    <span className="dora-eye left"/><span className="dora-eye right"/><span className="dora-nose"/>
-    <span className="dora-mouth"/><span className="dora-bib"/><span className="dora-bell"/>
-  </span>;
-}
-
 function GlobalSearch(){
   const router=useRouter();
   const {products,orders,selectedCompanyId,companies,setSelectedCompanyId}=useStore();
@@ -91,49 +84,6 @@ function GlobalSearch(){
   </div>;
 }
 
-function DoraemonAssistant(){
-  const {selectedCompanyId,companies}=useStore();
-  const companyName=selectedCompanyId==='all'?'All Companies':companies.find(c=>c.id===selectedCompanyId)?.name || 'Selected Company';
-  const [open,setOpen]=useState(false);
-  const [input,setInput]=useState('');
-  const [loading,setLoading]=useState(false);
-  const [messages,setMessages]=useState<Array<{role:'user'|'assistant';text:string}>>([
-    {role:'assistant',text:`Hi Azam 👋 Main DORAEMON hoon — tumhara inventory assistant. ${companyName==='All Companies'?'All Companies view active hai.':'Abhi '+companyName+' selected hai.'} SKU, stock, orders ya returns ke baare mein pucho.`}
-  ]);
-
-  useEffect(()=>{
-    if(messages.length===1&&messages[0].role==='assistant'){
-      setMessages([{role:'assistant',text:`Hi Azam 👋 Main DORAEMON hoon — tumhara inventory assistant. ${companyName==='All Companies'?'All Companies view active hai.':'Abhi '+companyName+' selected hai.'} SKU, stock, orders ya returns ke baare mein pucho.`}]);
-    }
-  },[companyName]);
-
-  async function send(text=input){
-    const question=text.trim(); if(!question||loading)return;
-    setInput('');
-    const next=[...messages,{role:'user' as const,text:question}]; setMessages(next);setLoading(true);
-    try{
-      const res=await fetch('/api/assistant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:question,companyId:selectedCompanyId,companyName,history:next.slice(-8)})});
-      const data=await res.json(); if(!res.ok) throw new Error(data?.error||'Assistant failed');
-      setMessages(m=>[...m,{role:'assistant',text:data.text}]);
-    }catch(e:any){setMessages(m=>[...m,{role:'assistant',text:`Bhai, DORAEMON abhi connect nahi ho paaya. ${e?.message||'Please try again.'}`}]);}
-    finally{setLoading(false)}
-  }
-  function submit(e:FormEvent){e.preventDefault();void send()}
-
-  return <>
-    <button className={`dora-launcher ${open?'hidden':''}`} onClick={()=>setOpen(true)} aria-label="Open DORAEMON AI Assistant">
-      <DoraemonAvatar/><span className="dora-ai-badge">AI</span><span className="dora-launcher-label"><b>DORAEMON</b><small>AI Assistant</small></span>
-    </button>
-    {open&&<div className="dora-panel">
-      <div className="dora-panel-head"><div className="dora-title"><DoraemonAvatar small/><span><b>DORAEMON</b><small>AI Assistant · {companyName}</small></span></div><div className="dora-online"><i/> Online</div><button className="dora-close" onClick={()=>setOpen(false)}>×</button></div>
-      <div className="dora-messages">{messages.map((m,i)=><div key={i} className={`dora-msg ${m.role}`}><div className="dora-msg-avatar">{m.role==='assistant'?<DoraemonAvatar small/>:<span>A</span>}</div><div className="dora-bubble">{m.text.split('\n').map((line,j)=><span key={j}>{line}{j<m.text.split('\n').length-1&&<br/>}</span>)}</div></div>)}{loading&&<div className="dora-msg assistant"><div className="dora-msg-avatar"><DoraemonAvatar small/></div><div className="dora-bubble typing">Checking<span>•</span><span>•</span><span>•</span></div></div>}</div>
-      <div className="dora-quick"><button onClick={()=>void send('Low stock products dikhao')} disabled={loading}>⚠ Low Stock</button><button onClick={()=>void send("Today's orders ka summary do")} disabled={loading}>▤ Orders</button><button onClick={()=>void send('Total stock kitna hai?')} disabled={loading}>▦ Total Stock</button></div>
-      <form className="dora-input" onSubmit={submit}><input value={input} onChange={e=>setInput(e.target.value)} placeholder="Kuch bhi pucho..."/><button disabled={loading||!input.trim()} aria-label="Send">➤</button></form>
-      <div className="dora-foot">AI responses can make mistakes. Important data verify kar lena.</div>
-    </div>}
-  </>;
-}
-
 export function Shell({children,active,title}:{children:React.ReactNode;active:string;title:string}){
   const path=usePathname();
   const {companies,selectedCompanyId,setSelectedCompanyId}=useStore();
@@ -144,7 +94,6 @@ export function Shell({children,active,title}:{children:React.ReactNode;active:s
       <nav>{items.map(([l,h])=><Link href={h} key={l} className={(active===l||(l==='Inventory'&&path.startsWith('/inventory')))?'active':''}><i>{iconFor(l)}</i>{l}</Link>)}</nav>
       <div className="sidebar-bottom"><Link href="/settings">⚙ Settings</Link><div className="user-mini"><span>A</span><div><b>Azam</b><small>Administrator</small></div></div></div>
     </aside>
-    <DoraemonAssistant/>
     <nav className="mobile-nav">{[items[0],items[1],items[2],items[4],items[5],items[6]].map(([l,h])=><Link href={h} key={l} className={active===l?'active':''}><i>{iconFor(l)}</i><span>{l==='Scan Product'?'Scan':l}</span></Link>)}</nav>
     <main className="main"><header className="topbar"><div className="mobile-title"><b>OV</b> {title}</div><GlobalSearch/><div className="top-actions"><span className="top-company">{selectedCompanyId==='all'?'All Companies':companies.find(c=>c.id===selectedCompanyId)?.name}</span><div className="avatar">A</div></div></header><div className="content">{children}</div></main>
   </div>;

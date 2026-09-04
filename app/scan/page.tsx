@@ -26,6 +26,7 @@ export default function Scan(){
  const scannerId='ov-barcode-reader';
 
  useEffect(()=>{setCompanyId(selectedCompanyId==='all'?'':selectedCompanyId)},[selectedCompanyId]);
+ useEffect(()=>{if(!selected)return;const latest=products.find(p=>p.id===selected.id);if(latest&&latest.stock!==selected.stock)setSelected(latest)},[products,selected?.id]);
 
  useEffect(()=>{
    const existing=document.querySelector('script[data-ov-scanner]') as HTMLScriptElement|null;
@@ -103,13 +104,12 @@ export default function Scan(){
 
  async function toggleCamera(){if(running)await stopCamera();else await startCamera()}
 
- function update(type:ScanMode){
+ async function update(type:ScanMode){
    if(!selected)return;
    if(!companyId){setMsg('Select a company first.');return}
-   const ok=adjustStock(selected.id,qty,type,type==='Stock Out'?platform:'',partner,`Barcode scan — ${mode}`);
-   if(!ok){setMsg('Stock Out quantity cannot exceed available stock.');return}
-   setSelected({...selected,stock:selected.stock+(type==='Stock Out'?-qty:qty)});
-   setMsg(`✓ ${type} saved: ${qty} unit(s). Scan the next product.`);
+   const ok=await adjustStock(selected.id,qty,type,type==='Stock Out'?platform:'',partner,`Barcode scan — ${mode}`);
+   if(!ok){setMsg('Stock update failed. Check the error and try again.');return}
+   setMsg(`✓ ${type} saved to database: ${qty} unit(s). Scan the next product.`);
    setQty(1);
    if(running && continuous){setTimeout(()=>inputRef.current?.focus(),80)}
  }
@@ -142,7 +142,7 @@ export default function Scan(){
         <div className="product-large"><div className="product-placeholder">▦</div><div><div className="mini-company">{selected.companyName}</div><h2>{selected.name||'Unnamed product'}</h2><p>SKU: <b>{selected.sku}</b></p><div className="stock-big">{selected.stock} <span>pieces available</span></div></div></div>
         <div className="scan-action-summary"><b>{mode}</b><span>{mode==='Stock Out'?platform:'Warehouse stock'}</span></div>
         <div className="divider"/>
-        <div className="qty-label">Quantity</div><div className="qty-control"><button onClick={()=>setQty(Math.max(1,qty-1))}>−</button><strong>{qty}</strong><button onClick={()=>setQty(qty+1)}>+</button></div>
+        <label className="qty-label">Quantity<input type="number" min="1" step="1" value={qty} onChange={e=>setQty(Math.max(1,Number(e.target.value)||1))} inputMode="numeric"/></label>
         {mode==='Stock Out'&&<label>Shipping Partner (optional)<input value={partner} onChange={e=>setPartner(e.target.value)} placeholder="Delhivery, Ecom Express..."/></label>}
         <button className={`btn wide-action ${mode==='Stock Out'?'stock-out':'stock-in'}`} onClick={()=>update(mode)}>{mode==='Stock Out'?'− Confirm Stock Out':'＋ Confirm Stock In'}</button>
         <div className="detail-grid" style={{marginTop:16}}><div className="detail-box"><small>Opening Stock</small><b>{selected.openingStock}</b></div><div className="detail-box"><small>Received</small><b>{selected.received}</b></div><div className="detail-box"><small>Shipped</small><b>{selected.shipped}</b></div><div className="detail-box"><small>Returned</small><b>{selected.returned}</b></div></div>
