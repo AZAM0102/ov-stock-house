@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useRef,useState} from 'react';
 import {Shell,CompanyNotice} from '../components';
-import {useStore,Product} from '../store';
+import {useStore,Product,resolveProductBySku} from '../store';
 
 type ScanMode='Stock In'|'Stock Out';
 
@@ -42,7 +42,7 @@ export default function Scan(){
  },[]);
 
  const scoped=products.filter(p=>!companyId||p.companyId===companyId);
- const suggestions=value.trim()?scoped.filter(p=>{const q=value.trim().toLowerCase();return p.sku.toLowerCase().startsWith(q)||p.barcode.toLowerCase().startsWith(q)||p.name.toLowerCase().startsWith(q)}).slice(0,8):[];
+ const suggestions=value.trim()?scoped.filter(p=>{const q=value.trim().toLowerCase();return p.sku.toLowerCase().startsWith(q)||p.alternateSkus.some(s=>s.toLowerCase().startsWith(q))||p.barcode.toLowerCase().startsWith(q)||p.name.toLowerCase().startsWith(q)}).slice(0,8):[];
 
  function find(raw:string, source:'camera'|'scanner'|'manual'='manual'){
    const v=raw.trim();
@@ -50,8 +50,9 @@ export default function Scan(){
    const now=Date.now();
    if(source==='camera' && lastDecoded.current.value===v && now-lastDecoded.current.time<1400)return false;
    lastDecoded.current={value:v,time:now};
-   const lower=v.toLowerCase();
-   const matches=scoped.filter(x=>x.sku.toLowerCase()===lower||x.barcode.toLowerCase()===lower);
+   const productBySku=resolveProductBySku(scoped,companyId,v);
+   const barcodeMatches=scoped.filter(x=>x.barcode.trim()!==''&&x.barcode.trim().toLowerCase()===v.toLowerCase());
+   const matches=productBySku ? [productBySku] : barcodeMatches;
    if(matches.length===1){
      setSelected(matches[0]);
      setValue(v);
