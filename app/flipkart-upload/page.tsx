@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useStore } from '../store';
+import { useStore, resolveProductBySku } from '../store';
 import { Shell, CompanyNotice } from '../components';
 import { db } from '../supabase';
 
@@ -64,8 +64,33 @@ function parsePages(
   pages:string[],
   products:ReturnType<typeof useStore>['products']
 ){
-  const skuMap=new Map(products.map(p=>[p.sku.toUpperCase(),p]));
-  const knownSkus=[...skuMap.keys()].sort((a,b)=>b.length-a.length);
+  const entries:{sku:string; product:ReturnType<typeof useStore>['products'][number]}[]=[];
+  for(const product of products){
+    entries.push({sku:product.sku.trim(),product});
+    for(const alternate of product.alternateSkus){
+      const value=alternate.trim();
+      if(value) entries.push({sku:value,product});
+    }
+  }
+
+  // Exact spelling is always preferred. Case-insensitive matching is only a
+  // fallback when it resolves to one unique product.
+  const exactEntries=new Map<string,typeof entries[number][]>();
+  for(const entry of entries){
+    if(!entry.sku) continue;
+    const list=exactEntries.get(entry.sku) || [];
+    list.push(entry);
+    exactEntries.set(entry.sku,list);
+  }
+
+  const resolveKnown=(raw:string)=>{
+    const exact=exactEntries.get(raw.trim()) || [];
+    const exactProducts=[...new Map(exact.map(x=>[x.product.id,x.product])).values()];
+    if(exactProducts.length===1) return exactProducts[0];
+    if(exactProducts.length>1) return null;
+    return resolveProductBySku(products, products.find(p=>p.sku.trim()===raw.trim() || p.alternateSkus.some(a=>a.trim()===raw.trim()))?.companyId || products[0]?.companyId || '', raw);
+  };
+
   const orders:ParsedOrder[]=[];
   const unknown:UnknownLine[]=[];
 
@@ -76,57 +101,74 @@ function parsePages(
     const orderId=fullText.match(/\bOD\d{8,}\b/i)?.[0]?.toUpperCase()
       || `FLIPKART-PAGE-${pageIndex+1}`;
 
-    // Find SKU occurrences in document order.
-    const hits:{sku:string; index:number; length:number}[]=[];
-    for(const sku of knownSkus){
-      const re=new RegExp(escapeRegExp(sku),'gi');
+    const hits:{sku:string; index:number; length:number; product:ReturnType<typeof useStore>['products'][number]}[]=[];
+
+    // Exact SKU occurrences first. Sort longer values first at the same index
+    // so a parent SKU embedded in an alternate SKU cannot steal the match.
+    for(const entry of entries){
+      if(!entry.sku) continue;
+      const re=new RegExp(escapeRegExp(entry.sku),'g');
       for(const hit of labelSection.matchAll(re)){
-        hits.push({sku,index:hit.index||0,length:hit[0].length});
+        hits.push({
+          sku:entry.sku,
+          index:hit.index||0,
+          length:hit[0].length,
+          product:entry.product
+        });
       }
     }
-    hits.sort((a,b)=>a.index-b.index);
+    hits.sort((a,b)=>a.index-b.index || b.length-a.length);
 
-    // Remove accidental overlapping matches.
-    const accepted:{sku:string;index:number;length:number}[]=[];
+    const accepted:{sku:string;index:number;length:number;product:ReturnType<typeof useStore>['products'][number]}[]=[];
     for(const hit of hits){
       const previous=accepted[accepted.length-1];
       if(previous && hit.index < previous.index+previous.length) continue;
       accepted.push(hit);
     }
 
-    // Candidate unknown SKU tokens before a pipe.
+    // Also support labels whose SKU casing differs from the master, but only
+    // when the casing-insensitive SKU maps to exactly one product.
     for(const match of labelSection.matchAll(/\b([A-Z0-9][A-Z0-9._-]{2,})\s*\|/gi)){
-      const value=match[1].toUpperCase();
-      if(skuMap.has(value)) continue;
-      if(/^(SKU|ID|QTY|GST|HNO|STD|AWB|COD|PREPAID)$/.test(value)) continue;
-      unknown.push({value,page:pageIndex+1});
+      const value=match[1].trim();
+      if(/^(SKU|ID|QTY|GST|HNO|STD|AWB|COD|PREPAID)$/i.test(value)) continue;
+      if(accepted.some(h=>h.index<= (match.index||0) && (match.index||0)<h.index+h.length)) continue;
+
+      const product=resolveKnown(value);
+      if(product){
+        const already=accepted.some(h=>h.product.id===product.id && Math.abs(h.index-(match.index||0))<3);
+        if(!already){
+          accepted.push({
+            sku:product.sku,
+            index:match.index||0,
+            length:match[0].length,
+            product
+          });
+        }
+      }else{
+        const exactCandidate=entries.some(e=>e.sku===value);
+        if(!exactCandidate) unknown.push({value,page:pageIndex+1});
+      }
     }
+
+    accepted.sort((a,b)=>a.index-b.index);
 
     accepted.forEach((hit,idx)=>{
       const next=accepted[idx+1];
       let segment=labelSection.slice(hit.index+hit.length,next?.index ?? labelSection.length);
-
-      // Don't let tracking/AWB data become a quantity.
       segment=segment.split(/\b(?:FMPC|FMPP)\d{8,}\b/i)[0];
 
-      // Only trust an explicit quantity marker. Random label numbers such as
-      // prices, PIN codes, dates or tracking values must never become stock qty.
       const qtyMatch=segment.match(/\b(?:QTY|QUANTITY)\s*[:#-]?\s*(\d{1,3})\b/i);
       const explicitQty=qtyMatch ? Number(qtyMatch[1]) : 0;
-
-      // If another SKU immediately follows, each occurrence represents one unit.
-      // Otherwise use explicit QTY when present; safe fallback is one unit.
       const nextIsSku=Boolean(next);
       const qty=nextIsSku ? 1 : (explicitQty>0 && explicitQty<1000 ? explicitQty : 1);
 
-      const p=skuMap.get(hit.sku)!;
       orders.push({
         orderId,
-        sku:p.sku,
+        sku:hit.product.sku,
         qty,
-        productName:p.name,
-        productId:p.id,
-        stock:p.stock,
+        productName:hit.product.name,
+        productId:hit.product.id,
+        stock:hit.product.stock,
         page:pageIndex+1
       });
     });
@@ -138,7 +180,7 @@ function parsePages(
 
   const grouped=new Map<string,ParsedLine>();
   for(const order of orders){
-    const key=order.sku.toUpperCase();
+    const key=order.sku;
     const old=grouped.get(key);
     grouped.set(key,{
       sku:order.sku,

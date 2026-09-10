@@ -17,9 +17,11 @@ export type Product = {
     returned: number;
     stock: number;
     minStock: number;
+    costPrice: number;
     status: string;
     sourceFile: string;
     isActive: boolean;
+    alternateSkus: string[];
 };
 export type Movement = {
     id: string;
@@ -62,6 +64,7 @@ type Data = {
     movements: Movement[];
     orders: Order[];
     returns: ReturnRow[];
+    skuMappings: Record<string, string[]>;
 };
 type Ctx = Data & {
     selectedCompanyId: string;
@@ -92,10 +95,13 @@ type Ctx = Data & {
 const Ctx = createContext<Ctx | null>(null);
 const initial = {
     ...seed,
-    products: seed.products.map(p => ({
+    products: seed.products.map((p, index) => ({
         ...p,
+        costPrice: Number((p as typeof p & { costPrice?: number }).costPrice ?? (200 + ((index * 137) % 801))),
         isActive: true,
+        alternateSkus: [...(p.alternateSkus || [])],
     })),
+    skuMappings: {},
 } as Data;
 function cloneInitial(): Data {
     return JSON.parse(JSON.stringify(initial));
@@ -129,9 +135,11 @@ const mapProduct = (r: Record<string, unknown>, c: Company): Product => {
         returned,
         stock,
         minStock,
+        costPrice: Number(r.cost_price || 0),
         status: status(stock, minStock),
         sourceFile: c.sourceFile,
         isActive: r.is_active !== false,
+        alternateSkus: [],
     };
 };
 
@@ -195,8 +203,32 @@ const mapReturn = (
               : 'Damaged',
     shippingPartner: String(r.shipping_partner || ''),
     date: String(r.return_date),
-    source: 'Supabase',
+    source: String(r.source_file || r.source_status || 'Supabase'),
 });
+
+
+export function resolveProductBySku(products: Product[], companyId: string, rawSku: string): Product | null {
+    const sku = rawSku.trim();
+    if (!sku) return null;
+
+    // 1) Exact SKU first. This is important because the master can contain
+    // legitimate SKUs that differ only by case.
+    const exact = products.filter(p =>
+        p.companyId === companyId &&
+        (p.sku.trim() === sku || p.alternateSkus.some(a => a.trim() === sku))
+    );
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) return null;
+
+    // 2) Case-insensitive fallback only when unambiguous.
+    const folded = sku.toLowerCase();
+    const fallback = products.filter(p =>
+        p.companyId === companyId &&
+        (p.sku.trim().toLowerCase() === folded ||
+            p.alternateSkus.some(a => a.trim().toLowerCase() === folded))
+    );
+    return fallback.length === 1 ? fallback[0] : null;
+}
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
     const [data, setData] = useState<Data>({
@@ -205,6 +237,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         movements: [],
         orders: [],
         returns: [],
+        skuMappings: {},
     });
     const [selectedCompanyId, setSelectedCompanyId] = useState('all');
     const [ready, setReady] = useState(false);
@@ -222,7 +255,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         try {
             setLoading(true);
             setDbError('');
-            const [cs, ps, ms, os, rs] = await Promise.all([
+            const [cs, ps, ms, os, rs, kms] = await Promise.all([
                 db.select<Record<string, unknown>>(
                     'companies',
                     'select=*&order=name.asc'
@@ -243,6 +276,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                     'returns',
                     'select=*&order=return_date.desc&limit=1000'
                 ),
+                db.select<Record<string, unknown>>(
+                    'product_sku_mappings',
+                    'select=*&order=created_at.asc'
+                ),
             ]);
             const companies = cs.map(mapCompany);
             const products = ps.map(r =>
@@ -255,6 +292,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                     }
                 )
             );
+            const skuMappings: Record<string, string[]> = {};
+            for (const r of kms) {
+                const pid = String(r.product_id);
+                const value = String(r.marketplace_sku || '').trim();
+                if (!value) continue;
+                (skuMappings[pid] ||= []).push(value);
+            }
+            for (const p of products) p.alternateSkus = skuMappings[p.id] || [];
             const movements = ms.map(r => mapMovement(r, products));
             const running = new Map(products.map(p => [p.id, p.stock]));
             for (const m of movements) {
@@ -270,6 +315,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 movements,
                 orders: os.map(r => mapOrder(r, products)),
                 returns: rs.map(r => mapReturn(r, products)),
+                skuMappings,
             });
         } catch (e: unknown) {
             setDbError(
@@ -334,9 +380,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                             shipped: 0,
                             returned: 0,
                             low_stock_limit: p.minStock,
+                            cost_price: p.costPrice,
                         }
                     );
                     if (!rows?.[0]) throw new Error('Product was not saved.');
+                    const productId = String(rows[0].id);
+                    const alternateSkus = [...new Set((p.alternateSkus || []).map(x => x.trim()).filter(Boolean))];
+                    if (alternateSkus.length) {
+                        await db.insert('product_sku_mappings', alternateSkus.map(marketplace_sku => ({
+                            company_id: p.companyId, product_id: productId, platform: 'Flipkart', marketplace_sku
+                        })));
+                    }
                     await refresh();
                     return true;
                 } catch (e: unknown) {
@@ -359,9 +413,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                             product_name: p.name.trim(),
                             barcode: p.barcode.trim() || null,
                             low_stock_limit: p.minStock,
+                            cost_price: p.costPrice,
                         }
                     );
                     if (!rows?.[0]) throw new Error('Product was not saved.');
+                    await db.remove('product_sku_mappings', `product_id=eq.${encodeURIComponent(p.id)}`);
+                    const alternateSkus = [...new Set((p.alternateSkus || []).map(x => x.trim()).filter(Boolean))];
+                    if (alternateSkus.length) {
+                        await db.insert('product_sku_mappings', alternateSkus.map(marketplace_sku => ({
+                            company_id: p.companyId, product_id: p.id, platform: 'Flipkart', marketplace_sku
+                        })));
+                    }
                     await refresh();
                     return true;
                 } catch (e: unknown) {
@@ -440,9 +502,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             },
 
             addOrder: async o => {
-                const p = data.products.find(
-                    x => x.companyId === o.companyId && x.sku === o.sku
-                );
+                const p = resolveProductBySku(data.products, o.companyId, o.sku);
                 if (
                     !p ||
                     !Number.isInteger(o.items) ||
@@ -476,9 +536,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             },
 
             addReturn: async r => {
-                const p = data.products.find(
-                    x => x.companyId === r.companyId && x.sku === r.sku
-                );
+                const p = resolveProductBySku(data.products, r.companyId, r.sku);
                 if (!p || !Number.isInteger(r.qty) || r.qty < 1) return false;
                 try {
                     await db.insert('returns', {
